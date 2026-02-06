@@ -1,0 +1,102 @@
+#define TRIG_PIN 9
+#define ECHO_PIN 10
+#define FAN_PWM 5
+
+const float tubeHeight = 69.8;               // cm
+const float targetHeightFromBottom = 30;      // cm
+const float targetDistanceFromSensor = tubeHeight - targetHeightFromBottom;
+
+float measuredDistance;
+float error;
+float errorSum = 0;      // Integral term accumulator
+float previousError = 0; // For derivative calculation
+int pwmOutput;
+
+// PID Controller constants
+const int basePWM = 29.95;    // Base PWM
+const float Kp = 22.4685;         // Proportional gain
+const float Kd = 8.9415;         // Derivative gain
+const float Ki = 4.572;         // Integral gain (new)
+const int minPWM = 24;        // Minimum PWM
+const int maxPWM = 31;       // Maximum PWM
+const float minDistance = 2.0; // Minimum valid distance (in cm)
+
+unsigned long previousTime = 0;
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  pinMode(FAN_PWM, OUTPUT);
+
+  Serial.println("Starting fan at 8.5V to levitate ball...");
+  analogWrite(FAN_PWM, basePWM);
+
+  previousTime = millis();
+}
+
+void loop() {
+  // Trigger ultrasonic sensor
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000); // Timeout = 30ms
+  measuredDistance = duration * 0.034 / 2;
+
+  // Debugging: Print measured distance
+  Serial.print("Measured Distance: ");
+  Serial.print(measuredDistance);
+  Serial.print(" cm | ");
+
+  if (measuredDistance > minDistance && measuredDistance < tubeHeight) {
+    // Calculate error
+    error = measuredDistance - targetDistanceFromSensor;
+
+    // Limit error to avoid excessive correction
+    if (error > 10) error = 10;
+    if (error < -10) error = -10;
+
+    // Time calculations
+    unsigned long currentTime = millis();
+    float deltaTime = (currentTime - previousTime) / 1000.0; // Convert ms to seconds
+
+    // Update integral (accumulated error)
+    errorSum += error * deltaTime;
+
+    // Optional: Limit errorSum to prevent "integral windup"
+    if (errorSum > 50) errorSum = 50;
+    if (errorSum < -50) errorSum = -50;
+
+    // Derivative term (error rate)
+    float errorRate = (error - previousError) / deltaTime;
+
+    // PID Controller output
+    pwmOutput = basePWM + (Kp * error) + (Ki * errorSum) + (Kd * errorRate);
+
+    // Constrain PWM output
+    pwmOutput = constrain(pwmOutput, minPWM, maxPWM);
+
+    // Set PWM to the fan
+    analogWrite(FAN_PWM, pwmOutput);
+
+    // Debugging: Print error and PWM values
+    Serial.print("Error: ");
+    Serial.print(error);
+    Serial.print(" cm | ");
+    Serial.print("PWM: ");
+    Serial.println(pwmOutput);
+
+    // Update previous values
+    previousError = error;
+    previousTime = currentTime;
+  } else {
+    // Out of range: set fan to base PWM
+    analogWrite(FAN_PWM, basePWM);
+    Serial.println("Out of range. PWM set to base value.");
+  }
+
+  delay(100); // Delay to avoid flooding serial monitor
+}
